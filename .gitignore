@@ -3,3 +3,6 @@
 /.env
 /storage/uploads/
 /storage/logs/
+*composer.lock
+*test*
+*logs
