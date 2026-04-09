@@ -87,13 +87,13 @@ Design Patterns Used:
 ### Step 1: Install via Composer
 
 ```bash
-composer require your-org/storage-sdk
+composer require bloggermohiuddin/storage
 ```
 
 Or clone and install:
 
 ```bash
-git clone https://github.com/your-org/storage-sdk.git
+git clone https://github.com/bloggermohiuddin/storage.git
 cd storage-sdk
 composer install
 ```
