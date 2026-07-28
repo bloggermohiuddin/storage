@@ -1,7 +1,94 @@
-# Storage SDK for PHP
+# Self-Hosted Object Storage Platform (Cloudflare R2 & S3 Compatible)
 
-> A production-ready, S3-compatible storage abstraction layer for PHP.
-> **Works on shared hosting today. Migrates to Cloudflare R2 or Amazon S3 tomorrow — with zero application code changes.**
+> A production-grade, self-hosted Object Storage platform for PHP 8.1+.  
+> Behaves like **Cloudflare R2** while remaining fully **Amazon S3-compatible**.  
+> Runs locally on high-performance hashed storage or SQLite — no external server dependencies required.  
+> Seamlessly switch between **Local → R2 → S3 → MinIO → B2 → FTP** simply by updating environment configurations.
+
+---
+
+## Key Highlights
+
+- **S3-Style Public URLs**: Files are accessible at `/{bucket}/{key}` — clean, permanent URLs for public buckets, signed URLs for private buckets. No query-string soup.
+- **Cloudflare R2 Credentials & Compatibility**: Generates `ACCOUNT_ID`, `ACCESS_KEY`, `SECRET_KEY`, `DEFAULT_BUCKET`, `ENDPOINT`, and `PUBLIC_URL` format. Applications switch between local storage and production R2/S3 with **zero code changes**.
+- **Amazon S3 API Protocol Handler**: Native support for S3 endpoints (`PUT /:bucket/:key`, `GET /:bucket/:key`, `HEAD`, `DELETE`, `GET /:bucket`, S3 Multipart Uploads) with AWS Signature Version 4 (SigV4) authorization and S3 XML responses.
+- **Hashed Local Storage Engine**: Nested 2-level hashed directory layout (`storage/buckets/uploads/a1/b2/object.data`) with isolated metadata storage supporting millions of files efficiently.
+- **Fluent PHP SDK (`Storage` Facade)**: Standard chainable API: `$storage = Storage::driver('local'); $storage->bucket('uploads')->put('doc.pdf', $file);`.
+- **Background Migration Engine**: Multi-provider migration engine with parallel chunking, stream copy, progress tracking, and checksum verification.
+- **Full Admin Console**: Dark glassmorphic dashboard for bucket management, object file browser, credentials manager, live analytics, and migration control.
+
+---
+
+## Quick Start (Local Development)
+
+### 1. Start Server
+```bash
+php -S localhost:8080 -t public
+```
+
+### 2. Configure `.env`
+
+```ini
+# Required — your application base URL
+APP_URL=http://localhost:8080
+
+# Required — HMAC secret for signing private URLs (generate with: openssl rand -hex 32)
+SIGNED_URL_SECRET=2096cbd880a40dc729954fc56970e8609d92210b75f12e2ba85b3d8a150f96fd
+
+# Storage driver
+STORAGE_DRIVER=local
+```
+
+### 3. Default Local Credentials
+```ini
+ACCOUNT_ID=local
+ACCESS_KEY=local_access_key
+SECRET_KEY=local_secret_key_1234567890
+DEFAULT_BUCKET=uploads
+ENDPOINT=http://localhost:8080
+PUBLIC_URL=http://localhost:8080
+```
+
+> **Note:** Update `ENDPOINT` and `PUBLIC_URL` to match your `APP_URL` if not using localhost.
+
+### 4. Usage with PHP SDK
+```php
+use StoragePlatform\SDK\Storage;
+
+$storage = Storage::driver('local'); // Or 'r2', 's3', 'minio'
+
+// Upload file
+$storage->bucket('uploads')->put('invoice.pdf', '/path/to/local/file.pdf');
+
+// Get direct public URL (S3-style: /{bucket}/{key})
+$publicUrl = $storage->url('invoice.pdf');
+// → http://localhost:8080/uploads/invoice.pdf
+
+// Get signed temporary URL (for private buckets)
+$signedUrl = $storage->temporaryUrl('invoice.pdf', 3600);
+// → http://localhost:8080/uploads/invoice.pdf?expires=...&signature=...
+
+// Delete file
+$storage->delete('invoice.pdf');
+```
+
+### 5. Deploying to Shared Hosting (cPanel / DirectAdmin Subdomain)
+
+1. **Upload Files**: Upload the repository to your server (e.g. `/home/username/storage`).
+2. **Set Subdomain Document Root**:
+   - In cPanel / DirectAdmin, create your subdomain (e.g., `storage.yourdomain.com`).
+   - Set the **Document Root** to `/home/username/storage/public` (the `public/` directory).
+3. **Configure `.env`**: Set `APP_URL` to your domain (e.g. `APP_URL=https://storage.yourdomain.com`) and generate a secure `SIGNED_URL_SECRET`.
+4. **Verify PHP Version & Extensions**:
+   - Set PHP version to **PHP 8.2+** (or 8.1+).
+   - Ensure `pdo_sqlite` extension is enabled.
+5. **Directory Permissions**:
+   - Make `storage/` and `database/` writable (`755` permissions).
+6. **Set Up Cron Job for Background Worker**:
+   - In cPanel Cron Jobs, add a 1-minute cron job to run background migrations and lifecycle tasks:
+     ```bash
+     * * * * * php /home/username/storage/cli/worker.php >> /dev/null 2>&1
+     ```
 
 ---
 
@@ -9,776 +96,654 @@
 
 1. [Overview](#overview)
 2. [Architecture](#architecture)
-3. [Installation](#installation)
+3. [Module Breakdown](#module-breakdown)
 4. [Folder Structure](#folder-structure)
-5. [Configuration](#configuration)
-6. [Local Storage — Usage Guide](#local-storage--usage-guide)
-7. [Cloudflare R2 / Amazon S3 Usage](#cloudflare-r2--amazon-s3-usage)
-8. [Full API Reference](#full-api-reference)
-9. [File Key System](#file-key-system)
-10. [Migration Guide: Local → R2/S3](#migration-guide-local--r2s3)
-11. [Security Best Practices](#security-best-practices)
-12. [Performance Tips](#performance-tips)
-13. [Plain PHP Integration Example](#plain-php-integration-example)
-14. [Troubleshooting](#troubleshooting)
-
----
-
-## Overview
-
-### The Problem
-
-Shared hosting means you can't use S3 today. But you want:
-
-- Clean architecture so you can migrate to S3 later
-- No changes to your business logic when you switch
-- Existing uploaded files preserved with the same keys
-
-### The Solution
-
-This SDK uses the **Adapter Pattern** to completely decouple your application from the storage backend. Your code always talks to `StorageManager` — never to the filesystem or S3 directly.
-
-```
-Your App
-   │
-   ▼
-StorageManager  ──►  LocalAdapter   (shared hosting, today)
-                ──►  S3Adapter      (Cloudflare R2 / S3, tomorrow)
-```
-
-Switching requires changing one line in `.env`:
-
-```
-# Today
-STORAGE_DRIVER=local
-
-# Tomorrow
-STORAGE_DRIVER=r2
-```
+5. [Quick Start](#quick-start)
+6. [Admin Dashboard](#admin-dashboard)
+7. [Storage Providers & Drivers](#storage-providers)
+8. [URL Formats & Access](#url-formats)
+9. [Migration Engine](#migration-engine)
+10. [REST API Reference](#rest-api-reference)
+11. [PHP SDK Facade](#php-sdk)
+12. [CLI Tools & Testing](#cli-tools)
 
 ---
 
 ## Architecture
 
 ```
-SOLID Principles Applied:
-  S — Single Responsibility  (each class has one job)
-  O — Open/Closed            (add new adapters without modifying existing code)
-  L — Liskov Substitution    (LocalAdapter and S3Adapter are fully interchangeable)
-  I — Interface Segregation  (StorageInterface is lean, no fat contracts)
-  D — Dependency Inversion   (code depends on StorageInterface, not concrete classes)
-
-Design Patterns Used:
-  • Adapter Pattern    — LocalAdapter and S3Adapter both implement StorageInterface
-  • Facade Pattern     — StorageManager hides adapter complexity
-  • Factory Method     — StorageManager::disk() creates the right adapter
++-----------------------------------------------------------------------------------+
+|                                  Client / App                                    |
+|   (AWS SDK / R2 Client / PHP SDK / S3cmd / Web Dashboard / REST API Clients)      |
++----------------------------------------+------------------------------------------+
+                                         |
+                                  http://localhost:8080
+                                         |
++----------------------------------------v------------------------------------------+
+|                            Unified Server Entrypoint                              |
+|                              (public/index.php)                                   |
++-------------------+-----------------------------------+---------------------------+
+                    |                                   |
+        +-----------v-----------+           +-----------v-----------+
+        |   REST API Router     |           |    S3 API Router      |
+        |     (/api/...)        |           |  (SigV4 & S3 Protocol)|
+        +-----------+-----------+           +-----------+-----------+
+                    |                                   |
+                    +-----------------+-----------------+
+                                      |
++-------------------------------------v---------------------------------------------+
+|                                Core Domain Services                               |
+|   BucketService | ObjectService | AuthEngine | MetadataService | LifecycleService    |
+|   MultipartEngine | SignedUrlEngine | StorageQuotaService | MigrationEngine       |
++-------------------------------------v---------------------------------------------+
+                                      |
++-------------------------------------v---------------------------------------------+
+|                                Driver Subsystem                                   |
+|   LocalDriver (Hashed) | S3Driver | R2Driver | MinIODriver | FTP | SFTP | Memory    |
++-------------------------------------v---------------------------------------------+
+                                      |
+                  +-------------------+-------------------+
+                  |                                       |
+        +---------v---------+                   +---------v---------+
+        |  Local Filesystem |                   |  SQLite Database  |
+        |  (storage/...)    |                   |  (Metadata/Keys)  |
+        +-------------------+                   +-------------------+
 ```
 
 ---
 
-## Installation
+## Module Breakdown
 
-### Requirements
+### 1. Providers Module (`src/Providers/`)
 
-- PHP >= 8.1
-- Composer
-- (For S3/R2) AWS SDK for PHP (installed automatically via Composer)
+Every provider implements `StorageProviderInterface` with identical capabilities:
 
-### Step 1: Install via Composer
-
-```bash
-composer require your-org/storage-sdk
+```php
+put(bucket, key, source, options): string
+get(bucket, key): string
+delete(bucket, key): bool
+exists(bucket, key): bool
+copy(bucket, fromKey, toKey): bool
+move(bucket, fromKey, toKey): bool
+metadata(bucket, key): array
+listObjects(bucket, prefix): array
+streamRead(bucket, key): resource
+streamWrite(bucket, key, resource, options): bool
+temporaryUrl(bucket, key, expiry): string
+```
+listBuckets(): array
+createBucket(name, options): bool
+deleteBucket(name): bool
+health(): array
 ```
 
-Or clone and install:
+Available providers: `LocalProvider`, `MyCloudProvider`, `S3Provider`, `R2Provider`, `B2Provider`, `MinIOProvider`.
 
-```bash
-git clone https://github.com/your-org/storage-sdk.git
-cd storage-sdk
-composer install
+Adding a new provider requires only implementing the interface — zero changes elsewhere.
+
+---
+
+### 2. MyCloud Provider (default engine)
+
+MyCloud is the built-in self-hosted storage engine. It uses:
+- **SQLite** for all metadata (object index, bucket registry, hashes)
+- **Hashed filesystem layout** for physical file storage
+
+Physical layout uses SHA-256 to prevent directory bloat at scale:
+```
+storage/mycloud/data/
+  ab/
+    cd/
+      abcdef1234567890...   ← actual file bytes
 ```
 
-### Step 2: Create your .env file
+This layout supports millions of files without filesystem performance degradation.
 
-```bash
-cp .env.example .env
+---
+
+### 3. Queue Module (`src/Queue/`)
+
+A generic, swappable background queue backed by SQLite. Designed to be replaced with Redis, RabbitMQ, or SQS with no changes to the Transfer Engine.
+
+```
+QueueInterface::push(jobClass, payload, queue)
+QueueInterface::pop(queue): ?array
+QueueInterface::delete(jobId): bool
+QueueInterface::release(jobId, delay): bool
 ```
 
-Edit `.env` with your values (see [Configuration](#configuration)).
+---
 
-### Step 3: Create storage directory
+### 4. Transfer Engine (`src/Transfer/`)
 
-```bash
-mkdir -p storage/uploads
-chmod 755 storage/uploads
+Moves objects between any two `StorageProviderInterface` instances using streaming (no full-file buffering). Supports:
+
+- Prefix filters
+- Regex filters  
+- Extension allow-lists
+- Min/max file size filters
+- Skip-existing / overwrite rules
+- Dry-run simulation
+- Per-object progress callbacks
+- Cancellation checks between objects
+
+---
+
+### 5. Server Core (`src/Server/`)
+
+Manages all SQLite metadata:
+- `Database` — PDO connection, auto-schema init, seed admin user
+- `AuthService` — session, Bearer token, API key validation
+- `BucketManager` — bucket lifecycle (create/delete/stats)
+- `ObjectManager` — object store/delete/URL generation with hash tracking
+
+---
+
+### 6. API Module (`src/API/`)
+
+Thin REST layer. Routes map directly to controller methods. Auth middleware runs as a named gate (`['auth']`).
+
+---
+
+### 7. SDK Module (`src/SDK/`)
+
+Provides a clean developer-facing API:
+
+```php
+use StoragePlatform\SDK\StorageClient;
+
+$storage = StorageClient::disk('mycloud'); // or 's3', 'r2', 'b2', 'local', 'minio'
+
+$storage->put('my-bucket', 'invoices/2026/abc.pdf', '/tmp/file.pdf');
+$url = $storage->temporaryUrl('my-bucket', 'invoices/2026/abc.pdf', 3600);
+$content = $storage->get('my-bucket', 'invoices/2026/abc.pdf');
 ```
 
-> **Shared Hosting Tip:** The SDK auto-creates subdirectories, but the `storage/uploads` root must exist and be writable.
+All providers expose the exact same method signatures. Switch disks with a string change.
 
-### Step 4: Protect the storage directory
+---
 
-Add a `.htaccess` inside `storage/uploads/` to block direct script execution:
+## Security
 
-```apache
-Options -Indexes
-<FilesMatch "\.(php|php3|php4|php5|phtml|phar|pl|py|cgi|sh|asp|aspx)$">
-    Order Allow,Deny
-    Deny from all
-</FilesMatch>
+### Signed URLs for Private Buckets
+
+When a bucket's visibility is set to `private`, files require a valid HMAC-SHA256 signature to access. The signature is computed as:
+
 ```
+HMAC-SHA256(SIGNED_URL_SECRET, "{bucket}|{key}|{expires}")
+```
+
+**PHP example:**
+```php
+$secret = $_ENV['SIGNED_URL_SECRET'];
+$expires = time() + 3600; // 1 hour
+$signature = hash_hmac('sha256', "uploads|photos/file.jpg|{$expires}", $secret);
+$url = "http://storage.localhost/uploads/photos/file.jpg?expires={$expires}&signature={$signature}";
+```
+
+**Python example:**
+```python
+import hmac, hashlib, time
+
+secret = os.environ['SIGNED_URL_SECRET']
+expires = int(time.time()) + 3600
+signature = hmac.new(secret.encode(), f"uploads|photos/file.jpg|{expires}".encode(), hashlib.sha256).hexdigest()
+url = f"http://storage.localhost/uploads/photos/file.jpg?expires={expires}&signature={signature}"
+```
+
+### Authentication Methods
+
+The server supports multiple authentication methods for API access:
+
+| Method | Usage |
+|---|---|
+| Session cookie | Admin dashboard (browser login) |
+| `Authorization: Bearer {access_key}` | API clients |
+| `Authorization: Basic base64(access_key:secret_key)` | SDK / curl |
+| `?access_key=X&secret_key=Y` | Download links |
+| AWS SigV4 | S3-compatible clients (AWS SDK, boto3, s3cmd) |
+| `X-Access-Key` / `X-Secret-Key` headers | Custom integrations |
 
 ---
 
 ## Folder Structure
 
 ```
-storage-sdk/
+storage/
+├── cli/
+│   ├── worker.php            ← Background queue worker daemon
+│   └── test_providers.php    ← Platform diagnostics tool
 │
-├── config/
-│   └── storage.php          ← All disk configurations
+├── database/
+│   ├── schema.sql            ← SQLite schema definition
+│   └── database.sqlite       ← Auto-created on first run
+│
+├── public/                   ← Document root (point Apache/Nginx here)
+│   ├── index.php             ← Front controller + S3-style route handling
+│   ├── .htaccess             ← Apache mod_rewrite for SPA routing
+│   ├── css/
+│   │   └── app.css           ← Glassmorphic dark dashboard stylesheet
+│   ├── js/
+│   │   └── app.js            ← SPA controller (no framework, vanilla JS)
+│   └── views/
+│       ├── dashboard.php     ← Authenticated dashboard shell
+│       └── login.php         ← Login page
 │
 ├── src/
-│   ├── Contracts/
-│   │   └── StorageInterface.php   ← The contract everything depends on
-│   │
-│   ├── Adapters/
-│   │   ├── LocalAdapter.php       ← Filesystem implementation
-│   │   └── S3Adapter.php          ← S3/R2/B2 implementation (AWS SDK)
-│   │
-│   ├── Managers/
-│   │   └── StorageManager.php     ← Facade + driver resolver
-│   │
-│   ├── Support/
-│   │   ├── FileValidator.php      ← MIME, size, extension validation
-│   │   ├── KeyGenerator.php       ← UUID-based unique key generation
-│   │   └── Logger.php             ← File-based logging
-│   │
-│   └── Exceptions/
-│       ├── StorageException.php
-│       ├── FileNotFoundException.php
-│       └── InvalidFileException.php
-│
-├── migration/
-│   └── migrate.php          ← CLI migration script (local → S3/R2)
-│
-├── examples/
-│   ├── upload.php           ← HTML form upload demo
-│   ├── retrieve.php         ← File info retrieval demo
-│   └── serve_signed.php     ← Signed URL serve script
+│   ├── API/
+│   │   ├── Router.php
+│   │   └── Controllers/
+│   │       ├── AuthController.php
+│   │       ├── BucketController.php
+│   │       ├── CredentialController.php
+│   │       ├── MetricsController.php
+│   │       ├── MigrationController.php
+│   │       ├── ObjectController.php        ← Stream + S3-style access handler
+│   │       ├── ProviderController.php
+│   │       └── ServerInfoController.php
+│   │   └── S3/
+│   │       ├── S3ApiController.php
+│   │       ├── S3XmlResponse.php
+│   │       └── SigV4Authenticator.php
+│   ├── Providers/
+│   │   ├── StorageProviderInterface.php
+│   │   ├── ProviderFactory.php
+│   │   ├── LocalProvider.php              ← Uses SIGNED_URL_SECRET
+│   │   ├── MyCloudProvider.php            ← Uses SIGNED_URL_SECRET
+│   │   ├── BaseS3Provider.php
+│   │   ├── S3Provider.php
+│   │   ├── R2Provider.php
+│   │   ├── B2Provider.php
+│   │   ├── MinIOProvider.php
+│   │   ├── FTPDriver.php
+│   │   └── MemoryDriver.php
+│   ├── Queue/
+│   │   ├── QueueInterface.php
+│   │   ├── SQLiteQueue.php
+│   │   └── Worker.php
+│   ├── SDK/
+│   │   ├── Storage.php                    ← S3-style URL generation
+│   │   └── StorageClient.php
+│   ├── Server/
+│   │   ├── Database.php                   ← Auto-migrates provider URLs
+│   │   ├── AuthService.php
+│   │   ├── BucketManager.php
+│   │   └── ObjectManager.php              ← S3-style URL generation
+│   ├── StorageEngine/
+│   │   └── HashedLocalEngine.php
+│   └── Transfer/
+│       ├── TransferEngine.php
+│       └── TransferJob.php
 │
 ├── storage/
-│   └── uploads/             ← Local file storage root
+│   ├── uploads/              ← Local provider physical files
+│   └── mycloud/
+│       └── data/             ← MyCloud hashed file layout
 │
-├── logs/
-│   └── storage.log          ← SDK activity log
-│
-├── .env.example
-├── composer.json
-└── README.md
+├── logs/                     ← Application logs
+├── .env                      ← Environment configuration (APP_URL, SIGNED_URL_SECRET)
+├── .env.example              ← Environment variable template
+├── .gitignore
+└── composer.json
 ```
+
+---
+
+## Quick Start
+
+### Requirements
+- PHP 8.1+
+- Composer
+- Apache (XAMPP) or `php -S` built-in server
+- SQLite extension enabled (`php_pdo_sqlite`)
+
+### Install
+
+```bash
+git clone https://github.com/bloggermohiuddin/storage.git
+cd storage-platform
+composer install
+cp .env.example .env
+```
+
+### Run (built-in PHP server)
+
+```bash
+php -S localhost:8000 -t public/
+```
+
+Open `http://localhost:8000` — the database is initialized automatically on first load.
+
+**Default credentials:** `admin` / `adminpassword`
+
+> Change the password immediately after first login via the API Keys section.
+
+### Run Background Worker
+
+In a separate terminal:
+
+```bash
+php cli/worker.php --queue=migrations
+```
+
+This processes all background migration jobs dispatched from the dashboard.
+
+### Diagnostics
+
+```bash
+php cli/test_providers.php
+```
+
+---
+
+## Admin Dashboard
+
+The dashboard is a single-page application (SPA) with six sections:
+
+| Section | Description |
+|---|---|
+| **Dashboard** | Platform metrics, provider usage, queue status |
+| **Buckets** | Create, list, delete buckets across any provider |
+| **Object Browser** | Drag-and-drop upload, list, download, delete, copy |
+| **Storage Providers** | Configure S3, R2, B2, MinIO, Local, MyCloud |
+| **Migration Engine** | Create and monitor background transfer jobs |
+| **API Keys & SDK** | Generate programmatic access credentials |
+
+---
+
+## Storage Providers
+
+Configure additional providers from the Admin UI → **Storage Providers** tab, or via `POST /api/providers`.
+
+| Driver | Description |
+|---|---|
+| `mycloud` | Built-in self-hosted engine (SQLite + hashed FS) |
+| `local` | Raw local filesystem |
+| `s3` | Amazon S3 |
+| `r2` | Cloudflare R2 (auto-disables ACLs, forces `region=auto`) |
+| `b2` | Backblaze B2 (auto-builds S3-compatible endpoint) |
+| `minio` | Self-hosted MinIO (forces path-style endpoint) |
+
+---
+
+## URL Formats
+
+Files are accessible via S3-style path-based URLs. The URL format depends on bucket visibility.
+
+### Public Buckets
+
+```
+GET /{bucket}/{key}
+```
+
+**Example:**
+```
+GET /uploads/photos/2026/07/28/abc123.png
+→ http://storage.localhost/uploads/photos/2026/07/28/abc123.png
+```
+
+No authentication required. Anyone with the URL can access the file.
+
+### Private Buckets (Signed URLs)
+
+```
+GET /{bucket}/{key}?expires={timestamp}&signature={hmac_sha256}
+```
+
+**Example:**
+```
+GET /private/invoices/2026/07/28/invoice.pdf?expires=1753800000&signature=a1b2c3...
+→ http://storage.localhost/private/invoices/2026/07/28/invoice.pdf?expires=1753800000&signature=a1b2c3...
+```
+
+The signature is an HMAC-SHA256 computed as:
+```
+HMAC-SHA256(SIGNED_URL_SECRET, "{bucket}|{key}|{expires}")
+```
+
+Signed URLs expire after the `expires` timestamp. The `SIGNED_URL_SECRET` in `.env` must match between the server and any URL-generating client.
+
+### Legacy URL Formats
+
+These formats still work but the S3-style format above is preferred:
+- `/api/objects/stream?bucket={name}&key={key}` — query-parameter style
+- `/object/{bucket}/{key}` — alias for S3-style
+
+---
+
+## Migration Engine
+
+Migrate objects between **any two configured providers** — in any direction:
+
+```
+Local    → MyCloud
+MyCloud  → R2
+R2       → S3
+B2       → MyCloud
+S3       → MinIO
+```
+
+### How it works
+
+1. From the dashboard, click **New Migration Job**
+2. Select Source and Target provider
+3. Set optional filter rules (prefix, overwrite, dry-run)
+4. Click **Start Background Migration**
+5. A job is pushed to the SQLite queue
+6. The CLI worker picks it up and streams objects from source → target
+7. Live progress is visible in the dashboard (auto-refreshes every 4s)
+
+### Migration Rules
+
+| Rule | Description |
+|---|---|
+| `prefix` | Only migrate keys starting with this prefix |
+| `regex` | Only migrate keys matching this regex pattern |
+| `extensions` | Whitelist of file extensions to transfer |
+| `min_size` | Minimum file size in bytes |
+| `max_size` | Maximum file size in bytes |
+| `overwrite` | Overwrite existing files at destination |
+| `dry_run` | Simulate the transfer without moving any data |
+
+---
+
+## Queue System
+
+The `SQLiteQueue` stores jobs in the `queue_jobs` table with transactional reservation to prevent double-delivery across multiple workers.
+
+### Job Lifecycle
+
+```
+pending → reserved (processing) → deleted (success)
+                                → released with backoff (retry)
+                                → deleted after max_attempts (failure)
+```
+
+Retry strategy: exponential backoff — `5s, 10s, 20s` before giving up.
+
+### Run the Worker
+
+```bash
+# Default queue
+php cli/worker.php
+
+# Specific queue channel
+php cli/worker.php --queue=migrations
+```
+
+The worker supports graceful shutdown via `SIGTERM`/`SIGINT` signals.
+
+---
+
+## REST API Reference
+
+All endpoints require authentication (Session cookie, Bearer token, or Basic auth with API key pair).
+
+### Authentication
+
+```
+POST /api/auth/login       { username, password }
+POST /api/auth/logout
+GET  /api/auth/me
+GET  /api/auth/keys
+POST /api/auth/keys        { name }
+DELETE /api/auth/keys/{id}
+```
+
+### Buckets
+
+```
+GET    /api/buckets
+POST   /api/buckets        { name, provider_id, visibility }
+DELETE /api/buckets/{id}
+```
+
+### Objects
+
+```
+GET    /api/objects?bucket_id=&search=&prefix=
+POST   /api/objects        multipart/form-data: bucket_id, file, [key], [prefix]
+POST   /api/objects/delete { bucket_id, key }
+POST   /api/objects/copy   { bucket_id, from_key, to_key }
+GET    /api/objects/stream?bucket={name}&key={key}   (or ?bucket_id=&key=)
+GET    /{bucket}/{key}                                  (S3-style direct access)
+GET    /object/{bucket}/{key}                           (alias)
+```
+
+### Storage Providers
+
+```
+GET    /api/providers
+POST   /api/providers      { name, driver, endpoint, region, access_key, secret_key, bucket }
+POST   /api/providers/validate
+DELETE /api/providers/{id}
+```
+
+### Migrations
+
+```
+GET  /api/migrations
+POST /api/migrations       { source_provider_id, target_provider_id, rules: {} }
+GET  /api/migrations/{id}/logs
+POST /api/migrations/{id}/cancel
+```
+
+### Metrics
+
+```
+GET /api/metrics           → { summary, queue, providers, recent_logs }
+```
+
+---
+
+## PHP SDK
+
+```php
+use StoragePlatform\SDK\Storage;
+
+// Access any provider by driver name or display name
+$cloud = Storage::driver('mycloud');
+$r2    = Storage::driver('r2');
+$s3    = Storage::driver('s3');
+
+// All providers share the same interface
+$cloud->put('my-bucket', 'docs/report.pdf', '/tmp/report.pdf');
+$r2->put('my-bucket', 'docs/report.pdf', '/tmp/report.pdf');
+
+// Get public URL (S3-style: /{bucket}/{key})
+$url = $cloud->url('docs/report.pdf');
+// → http://storage.localhost/my-bucket/docs/report.pdf
+
+// Generate signed time-limited URL (for private buckets)
+$url = $cloud->temporaryUrl('docs/report.pdf', 3600);
+// → http://storage.localhost/my-bucket/docs/report.pdf?expires=...&signature=...
+
+// List objects
+$keys = $cloud->listObjects('my-bucket', 'docs/');
+
+// Copy within same provider
+$cloud->copy('my-bucket', 'docs/old.pdf', 'docs/new.pdf');
+
+// Check health
+$health = $cloud->health(); // ['status' => 'healthy', 'error' => null]
+```
+
+---
+
+## CLI Tools
+
+### `cli/worker.php` — Background Queue Worker
+
+```bash
+php cli/worker.php [--queue=migrations]
+```
+
+Runs indefinitely, processing queued migration jobs with exponential backoff retry. Gracefully shuts down on `SIGTERM`/`SIGINT`.
+
+### `cli/test_providers.php` — Diagnostics
+
+```bash
+php cli/test_providers.php
+```
+
+Verifies:
+1. SQLite database connection and schema
+2. All configured provider health checks  
+3. MyCloud write/read round-trip
+4. SDK API verification
 
 ---
 
 ## Configuration
 
-All configuration lives in `config/storage.php`. Values are overridden by environment variables from `.env`.
+### Environment Variables
 
-### Switch the Default Disk
+| Variable | Required | Description |
+|---|---|---|
+| `APP_URL` | Yes | Base URL for generating public object URLs (e.g. `http://storage.localhost`) |
+| `SIGNED_URL_SECRET` | Yes | HMAC-SHA256 secret for signing private bucket URLs. Generate with `openssl rand -hex 32` |
+| `STORAGE_DRIVER` | No | Default storage driver: `local`, `r2`, `s3`, `b2`, `minio` (default: `local`) |
+| `STORAGE_LOGGING` | No | Enable SDK logging: `true` or `false` |
 
-```php
-// config/storage.php
-'default' => 'local',    // or 'r2', 's3', 'b2'
-```
+### Database Auto-Init
 
-Or via `.env`:
+On first request, `Database::getConnection()`:
+1. Creates `database/database.sqlite` if missing
+2. Executes `database/schema.sql` to create all tables
+3. Seeds the default `admin` user
+4. Seeds the `Local Filesystem` provider with `APP_URL` as its base URL
+5. Creates the default `uploads` bucket (public)
 
-```
-STORAGE_DRIVER=r2
-```
+### Provider Config (from UI)
 
-### Local Disk Configuration
-
-```php
-'local' => [
-    'driver' => 'local',
-    'root'   => dirname(__DIR__) . '/storage/uploads',
-    'url'    => 'https://files.example.com',         // public base URL
-    'signed_url_secret' => 'your-32-char-secret',    // for token signing
-],
-```
-
-Generate a secure secret:
-
-```bash
-openssl rand -hex 32
-```
-
-### Cloudflare R2 Configuration
-
-```php
-'r2' => [
-    'driver'   => 's3',
-    'endpoint' => 'https://YOUR_ACCOUNT_ID.r2.cloudflarestorage.com',
-    'region'   => 'auto',
-    'bucket'   => 'my-bucket',
-    'key'      => 'your-r2-access-key-id',
-    'secret'   => 'your-r2-secret-access-key',
-    'url'      => 'https://files.example.com',  // custom domain (optional)
-    'no_acl'   => true,                         // R2 does not support ACLs
-],
-```
-
-> **R2 Note:** Get your credentials from Cloudflare Dashboard → R2 → API Tokens.
-> The endpoint format is: `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`
-
-### Amazon S3 Configuration
-
-```php
-'s3' => [
-    'driver'  => 's3',
-    'region'  => 'us-east-1',
-    'bucket'  => 'my-bucket',
-    'key'     => 'AKIAIOSFODNN7EXAMPLE',
-    'secret'  => 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
-    'url'     => '',  // leave empty to use native S3 URLs
-],
-```
-
-### Backblaze B2 Configuration
-
-```php
-'b2' => [
-    'driver'   => 's3',
-    'endpoint' => 'https://s3.us-west-004.backblazeb2.com',
-    'region'   => 'us-west-004',
-    'bucket'   => 'my-bucket',
-    'key'      => 'your-key-id',
-    'secret'   => 'your-application-key',
-    'url'      => '',
-],
-```
+Provider credentials are stored in the `storage_providers` table. The `url` field in each provider's options JSON should match your `APP_URL` for correct public URL generation. The database auto-migration updates this when `APP_URL` changes.
 
 ---
 
-## Local Storage — Usage Guide
+## Roadmap
 
-### Basic Upload
+### Phase 2 — In Progress
 
-```php
-<?php
-require 'vendor/autoload.php';
+- [x] S3-style `/{bucket}/{key}` URL routing for direct public/private object access
+- [x] Configurable HMAC-signed URLs for private buckets (`SIGNED_URL_SECRET`)
+- [x] Automatic provider URL migration on `APP_URL` change
+- [ ] Versioning (keep multiple object versions per key)  
+- [ ] Object lifecycle policies (auto-delete after N days)  
+- [ ] CORS configuration per bucket  
+- [ ] CDN integration (CloudFront, Cloudflare)  
+- [ ] Webhook events on object create/delete  
+- [ ] Object Lock / WORM compliance  
+- [ ] JWT authentication  
+- [ ] Role-based access control (RBAC)  
 
-use StorageSDK\Managers\StorageManager;
+### Phase 3 — Future
 
-$storage = StorageManager::disk('local');
-
-// Upload from PHP file upload ($_FILES)
-$key = $storage->putFile(
-    prefix: 'patients',
-    sourcePath: $_FILES['photo']['tmp_name'],
-    originalName: $_FILES['photo']['name']
-);
-
-// SAVE $key TO YOUR DATABASE — not the full URL
-// e.g. "patients/2026/04/a1b2c3d4-e5f6-7890.jpg"
-
-echo $storage->url($key);
-// → https://files.example.com/patients/2026/04/a1b2c3d4-e5f6-7890.jpg
-```
-
-### Upload with Validation
-
-```php
-$key = $storage->putFile(
-    prefix: 'documents',
-    sourcePath: $_FILES['doc']['tmp_name'],
-    originalName: $_FILES['doc']['name'],
-    options: [
-        'validate'      => true,
-        'max_size'      => 5 * 1024 * 1024,  // 5 MB
-        'date_folders'  => true,
-        'allowed_mimes' => ['image/jpeg', 'image/png', 'application/pdf'],
-    ]
-);
-```
-
-### Generate a Signed URL (Temporary Access)
-
-```php
-// Valid for 1 hour
-$signedUrl = $storage->generateSignedUrl($key, 3600);
-
-// Valid for 24 hours
-$signedUrl = $storage->generateSignedUrl($key, 86400);
-```
-
-For the **LocalAdapter**, signed URLs use HMAC-SHA256 tokens. Your serve script
-(`examples/serve_signed.php`) verifies the token and streams the file.
-
-### Other Operations
-
-```php
-// Check existence
-if ($storage->exists($key)) { ... }
-
-// Read raw content
-$content = $storage->get($key);
-
-// Delete
-$storage->delete($key);
-
-// Copy
-$storage->copy('patients/original.jpg', 'patients/backup.jpg');
-
-// Move (rename)
-$storage->move('patients/temp.jpg', 'patients/final.jpg');
-
-// Metadata
-$storage->size($key);          // → 204800  (bytes)
-$storage->mimeType($key);      // → "image/jpeg"
-$storage->lastModified($key);  // → 1714521600  (Unix timestamp)
-```
+- [ ] Multi-node replication  
+- [ ] Redis / RabbitMQ queue drivers  
+- [ ] Automatic provider health monitoring + alerts  
+- [ ] Storage analytics and cost estimation  
+- [ ] Extract each module into standalone Composer package  
 
 ---
 
-## Cloudflare R2 / Amazon S3 Usage
-
-Switch to R2 in `.env`:
-
-```
-STORAGE_DRIVER=r2
-```
-
-**Your application code does not change at all.** The same API works identically:
-
-```php
-$storage = StorageManager::disk(); // Now uses R2
-
-$key = $storage->putFile('patients', $_FILES['photo']['tmp_name'], $_FILES['photo']['name']);
-
-echo $storage->url($key);
-// → https://files.example.com/patients/2026/04/uuid.jpg  (via custom domain)
-
-echo $storage->generateSignedUrl($key, 3600);
-// → https://YOUR_ACCOUNT_ID.r2.cloudflarestorage.com/...?X-Amz-Signature=...
-```
-
-### Switching Per-Request
-
-```php
-// Force a specific disk regardless of default
-$local  = StorageManager::disk('local');
-$r2     = StorageManager::disk('r2');
-$s3     = StorageManager::disk('s3');
-```
-
----
-
-## Full API Reference
-
-### `putFile(prefix, sourcePath, originalName, options)` — High-Level Upload
-
-Generates a unique key, validates the file, and stores it.
-
-| Param | Type | Description |
-|-------|------|-------------|
-| `prefix` | string | Key prefix, e.g. `"patients"` or `"invoices/2026"` |
-| `sourcePath` | string | Absolute path to the source file (e.g. `$_FILES['x']['tmp_name']`) |
-| `originalName` | string | Original filename (used for extension extraction only) |
-| `options` | array | See below |
-
-**Options:**
-
-| Key | Default | Description |
-|-----|---------|-------------|
-| `validate` | `true` | Run FileValidator before storing |
-| `max_size` | `20971520` | Max file size in bytes (20 MB) |
-| `allowed_mimes` | `null` | Array of allowed MIME types (null = all non-blocked) |
-| `date_folders` | `true` | Add `/year/month/` to key path |
-| `no_acl` | `false` | Skip ACL header (required for Cloudflare R2) |
-
----
-
-### `put(key, source, options)` — Low-Level Store
-
-```php
-$storage->put('custom/path/file.jpg', '/tmp/uploaded.jpg');
-```
-
-### `get(key)` → string
-
-Returns raw file content.
-
-### `delete(key)` → bool
-
-### `exists(key)` → bool
-
-### `url(key)` → string
-
-Returns the public URL. Uses custom domain if configured.
-
-### `size(key)` → int
-
-File size in bytes.
-
-### `mimeType(key)` → string
-
-Returns MIME type (e.g. `"image/jpeg"`).
-
-### `lastModified(key)` → int
-
-Unix timestamp of last modification.
-
-### `copy(from, to)` → bool
-
-S3 server-side copy (no bandwidth consumed on S3/R2).
-
-### `move(from, to)` → bool
-
-Atomic rename. On S3: copy + delete.
-
-### `generateSignedUrl(key, expiry)` → string
-
-- **LocalAdapter:** HMAC-SHA256 token URL. Requires `serve_signed.php`.
-- **S3Adapter:** Native AWS presigned URL. No additional script needed.
-
----
-
-## File Key System
-
-### The Golden Rule: Store Keys, Not URLs
-
-**❌ Wrong:**
-```php
-// Don't store full URLs — they break when you change domains or storage providers
-$patient->photo = 'https://files.example.com/patients/2026/04/uuid.jpg';
-```
-
-**✅ Correct:**
-```php
-// Store only the key — reconstruct the URL from it anytime
-$patient->photo_key = 'patients/2026/04/a1b2c3d4-e5f6-7890-abcd-ef1234567890.jpg';
-```
-
-### Key Format
-
-```
-{prefix}/{year}/{month}/{uuid}.{ext}
-
-Examples:
-  patients/2026/04/a1b2c3d4-e5f6-7890-abcd-ef1234567890.jpg
-  invoices/2026/04/b2c3d4e5-f6g7-8901-bcde-fg2345678901.pdf
-  xrays/2026/04/c3d4e5f6-g7h8-9012-cdef-gh3456789012.png
-```
-
-### Key Generation
-
-Keys are auto-generated by `KeyGenerator::generate()`:
-
-```php
-use StorageSDK\Support\KeyGenerator;
-
-$key = KeyGenerator::generate(
-    originalFilename: 'profile-photo.jpg',
-    prefix: 'patients',
-    dateFolders: true
-);
-// → "patients/2026/04/a1b2c3d4-e5f6-7890-abcd-ef1234567890.jpg"
-```
-
-UUID v4 is used (CSPRNG-safe via `random_bytes()`).
-
----
-
-## Migration Guide: Local → R2/S3
-
-When you're ready to move from local to cloud storage:
-
-### Step 1: Configure the target disk
-
-Add R2/S3 credentials to `.env`:
-
-```
-R2_ENDPOINT=https://YOUR_ACCOUNT_ID.r2.cloudflarestorage.com
-R2_BUCKET=my-bucket
-R2_ACCESS_KEY_ID=...
-R2_SECRET_ACCESS_KEY=...
-R2_PUBLIC_URL=https://files.example.com
-```
-
-### Step 2: Dry-run the migration
-
-See what will be migrated without uploading anything:
-
-```bash
-php migration/migrate.php --disk=r2 --dry-run
-```
-
-### Step 3: Run the migration
-
-```bash
-# Migrate all files
-php migration/migrate.php --disk=r2
-
-# Migrate only specific prefix
-php migration/migrate.php --disk=r2 --prefix=patients/
-
-# Skip files already at the destination (safe to re-run)
-php migration/migrate.php --disk=r2 --skip-existing
-```
-
-Progress is logged to console and to `logs/storage.log`.
-
-Failed files are saved to `migration/failed.json` for retry.
-
-### Step 4: Switch the default driver
-
-```
-# .env
-STORAGE_DRIVER=r2
-```
-
-No code changes. Deploy and done.
-
-### Step 5: Verify
-
-```bash
-# Confirm a few known keys are accessible
-php -r "
-require 'vendor/autoload.php';
-use StorageSDK\Managers\StorageManager;
-\$s = StorageManager::disk('r2');
-echo \$s->url('patients/2026/04/some-file.jpg') . PHP_EOL;
-"
-```
-
-### Step 6: (Optional) Clean up local files
-
-Only after confirming R2 migration is complete:
-
-```bash
-rm -rf storage/uploads/*
-```
-
----
-
-## Security Best Practices
-
-### 1. Never Serve Uploaded Files Directly Through PHP Execution
-
-```apache
-# .htaccess in storage/uploads/
-Options -Indexes
-<FilesMatch "\.php">
-    Order Allow,Deny
-    Deny from all
-</FilesMatch>
-```
-
-### 2. Use a Strong HMAC Secret
-
-```bash
-# Generate in terminal
-openssl rand -hex 32
-```
-
-Set in `.env`:
-
-```
-SIGNED_URL_SECRET=a3f9c2d8b1e4...
-```
-
-### 3. Keep Storage Root Outside Webroot (Recommended)
-
-```
-/var/www/
-├── html/          ← webroot (publicly accessible)
-│   └── index.php
-└── storage/       ← outside webroot (not accessible via URL)
-    └── uploads/
-```
-
-Configure root in `config/storage.php`:
-
-```php
-'root' => '/var/www/storage/uploads',
-'url'  => 'https://example.com/serve_signed.php',
-```
-
-### 4. Validate All Uploads
-
-The SDK blocks all executable MIME types and extensions by default. Always use `putFile()` with `'validate' => true` for user uploads.
-
-### 5. Use HTTPS Only
-
-Never serve files over plain HTTP. In production, enforce HTTPS in your web server config.
-
-### 6. Rotate Credentials Regularly
-
-- Rotate your HMAC `SIGNED_URL_SECRET` periodically (this invalidates all existing signed URLs)
-- Rotate your S3/R2 API keys per your security policy
-
-### 7. Minimum IAM Permissions for S3
-
-```json
-{
-  "Effect": "Allow",
-  "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject", "s3:HeadObject"],
-  "Resource": "arn:aws:s3:::my-bucket/*"
-}
-```
-
----
-
-## Performance Tips
-
-### 1. Use S3 Server-Side Copy
-
-When using S3Adapter, `copy()` uses server-side copy — no data moves through your server. Extremely efficient for duplication or archiving.
-
-### 2. CDN / Custom Domain for Public Files
-
-In `config/storage.php`, set `url` to your CDN or custom domain:
-
-```php
-'url' => 'https://cdn.example.com'
-```
-
-This avoids signed URL overhead for public files and leverages edge caching.
-
-### 3. Avoid Fetching File Content Unless Necessary
-
-```php
-// For download links — use URL, don't read the whole file
-$url = $storage->url($key);    // ✅ Just a string operation
-
-// Only use get() when you need to process the content
-$content = $storage->get($key); // Downloads everything into memory
-```
-
-### 4. Batch Delete / Background Uploads
-
-For bulk operations, use the migration script as a reference pattern and implement job queues for background processing.
-
-### 5. Limit Log Verbosity in Production
-
-Set `'logging' => false` in `config/storage.php` or `STORAGE_LOGGING=false` in `.env` on high-traffic servers.
-
----
-
-## Plain PHP Integration Example
-
-Full example without any framework:
-
-```php
-<?php
-require 'vendor/autoload.php';
-
-use StorageSDK\Managers\StorageManager;
-use StorageSDK\Exceptions\InvalidFileException;
-use StorageSDK\Exceptions\StorageException;
-
-// ── Upload ────────────────────────────────────────────────────────────────────
-
-function handlePatientPhotoUpload(array $file, int $patientId, PDO $db): string
-{
-    $storage = StorageManager::disk();
-
-    try {
-        $key = $storage->putFile(
-            prefix: 'patients',
-            sourcePath: $file['tmp_name'],
-            originalName: $file['name'],
-            options: [
-                'allowed_mimes' => ['image/jpeg', 'image/png', 'image/webp'],
-                'max_size'      => 5 * 1024 * 1024,
-            ]
-        );
-
-        // Store only the KEY in the database
-        $stmt = $db->prepare("UPDATE patients SET photo_key = ? WHERE id = ?");
-        $stmt->execute([$key, $patientId]);
-
-        return $key;
-
-    } catch (InvalidFileException $e) {
-        throw new \RuntimeException("Invalid file: " . $e->getMessage());
-    }
-}
-
-// ── Get photo URL for a patient ───────────────────────────────────────────────
-
-function getPatientPhotoUrl(int $patientId, PDO $db): string
-{
-    $stmt = $db->prepare("SELECT photo_key FROM patients WHERE id = ?");
-    $stmt->execute([$patientId]);
-    $key = $stmt->fetchColumn();
-
-    if (! $key) {
-        return '/assets/default-avatar.png';
-    }
-
-    $storage = StorageManager::disk();
-
-    return $storage->url($key);
-    // Returns the correct URL regardless of whether backend is local or R2
-}
-
-// ── Delete patient photo ──────────────────────────────────────────────────────
-
-function deletePatientPhoto(int $patientId, PDO $db): void
-{
-    $stmt = $db->prepare("SELECT photo_key FROM patients WHERE id = ?");
-    $stmt->execute([$patientId]);
-    $key = $stmt->fetchColumn();
-
-    if ($key) {
-        StorageManager::disk()->delete($key);
-
-        $db->prepare("UPDATE patients SET photo_key = NULL WHERE id = ?")
-           ->execute([$patientId]);
-    }
-}
-```
-
----
-
-## Troubleshooting
-
-### "Failed to create directory"
-
-Ensure the `storage/uploads` root is writable:
-
-```bash
-chmod 755 storage/uploads
-```
-
-### "Source file not readable" on S3
-
-The temp file was cleaned up before uploading. Always pass `$_FILES['x']['tmp_name']` directly — don't move the file first.
-
-### "Invalid signature" on signed URL
-
-- Check that `SIGNED_URL_SECRET` matches between URL generation and verification
-- Ensure system clocks are synchronised (NTP)
-
-### R2 Access Denied
-
-- Ensure your API token has `Object Read & Write` permissions
-- Check `no_acl => true` is set in the `r2` disk config
-- Verify your `R2_ENDPOINT` includes the correct Account ID
-
-### S3 Adapter — "Could not resolve host"
-
-- Check `endpoint` format (must include `https://`)
-- Verify DNS / network from your server: `curl -I https://your-endpoint`
-
----
-
-## License
-
-MIT License — see [LICENSE](LICENSE) for details.
-
----
-
-*Built for PHP 8.1+ | Designed for shared hosting | Ready for the cloud*
+*Built with PHP 8.1+ · SQLite · No Docker Required · SOLID Architecture*

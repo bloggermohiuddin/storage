@@ -1,8 +1,74 @@
-/vendor/
-/node_modules/
-/.env
-/storage/uploads/
-/storage/logs/
-*composer.lock
-*test*
-*logs
+# ─────────────────────────────────────────
+# Environment & Secrets
+# ─────────────────────────────────────────
+.env
+.env.local
+.env.production
+
+# ─────────────────────────────────────────
+# Database
+# ─────────────────────────────────────────
+database/database.sqlite
+
+# ─────────────────────────────────────────
+# Storage (user uploads & runtime data)
+# ─────────────────────────────────────────
+storage/uploads/
+storage/mycloud/
+storage/buckets/
+storage/metadata/
+storage/multipart/
+storage/tmp/
+storage/logs/
+
+# ─────────────────────────────────────────
+# Dependencies
+# ─────────────────────────────────────────
+vendor/
+
+# ─────────────────────────────────────────
+# Logs
+# ─────────────────────────────────────────
+logs/
+*.log
+
+# ─────────────────────────────────────────
+# OS Files
+# ─────────────────────────────────────────
+.DS_Store
+.DS_Store?
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+._*
+
+# ─────────────────────────────────────────
+# IDEs & Editors
+# ─────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+.buildpath
+composer.phar
+
+# ─────────────────────────────────────────
+# PHP
+# ─────────────────────────────────────────
+*.phar
+
+# ─────────────────────────────────────────
+# Node (if frontend tooling added later)
+# ─────────────────────────────────────────
+node_modules/
+npm-debug.log*
+package-lock.json
+
+# ─────────────────────────────────────────
+# CLI temp files
+# ─────────────────────────────────────────
+cli/check_state.php
+cli/debug_*.php

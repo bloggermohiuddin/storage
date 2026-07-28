@@ -1,6 +1,6 @@
 {
     "name": "bloggermohiuddin/storage",
-    "description": "S3-compatible storage SDK for PHP — works on shared hosting, migrates to Cloudflare R2 or Amazon S3 with a config change",
+    "description": "Self-Hosted Object Storage — S3, R2, B2, MinIO, MyCloud with background migration engine",
     "type": "library",
     "license": "MIT",
     "require": {
@@ -12,12 +12,7 @@
     },
     "autoload": {
         "psr-4": {
-            "StorageSDK\\": "src/"
-        }
-    },
-    "autoload-dev": {
-        "psr-4": {
-            "StorageSDK\\Tests\\": "tests/"
+            "StoragePlatform\\": "src/"
         }
     },
     "minimum-stability": "stable",
@@ -28,6 +23,7 @@
     },
     "scripts": {
         "test": "vendor/bin/phpunit",
-        "migrate": "php migration/migrate.php"
+        "worker": "php cli/worker.php",
+        "diag": "php cli/test_providers.php"
     }
 }
