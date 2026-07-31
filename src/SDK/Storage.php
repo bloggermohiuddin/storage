@@ -129,7 +129,8 @@ class Storage
     public function url(string $key): string
     {
         $baseUrl = $_ENV['APP_URL'] ?? 'http://localhost:8080';
-        return rtrim($baseUrl, '/') . '/' . rawurlencode($this->activeBucket) . '/' . rawurlencode($key);
+        $encodedKey = str_replace('%2F', '/', rawurlencode($key));
+        return rtrim($baseUrl, '/') . '/' . rawurlencode($this->activeBucket) . '/' . $encodedKey;
     }
 
     /**

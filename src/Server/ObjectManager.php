@@ -182,7 +182,8 @@ class ObjectManager
         if ($bucket['visibility'] === 'public') {
             // Public objects get clean permanent S3-style direct URLs without signatures
             $baseUrl = rtrim($_ENV['APP_URL'] ?? ServerInfoController::detectBaseUrl(), '/');
-            return $baseUrl . '/' . rawurlencode($bucket['name']) . '/' . rawurlencode($key);
+            $encodedKey = str_replace('%2F', '/', rawurlencode($key));
+            return $baseUrl . '/' . rawurlencode($bucket['name']) . '/' . $encodedKey;
         }
 
         // Private objects get time-limited signed URLs

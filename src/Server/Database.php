@@ -144,7 +144,7 @@ class Database
         if ($appUrl) {
             $providers = $pdo->query("SELECT id, options FROM storage_providers WHERE driver = 'local'")->fetchAll();
             foreach ($providers as $provider) {
-                $opts = json_decode($provider['options'], true) ?? [];
+                $opts = json_decode($provider['options'] ?? '', true) ?? [];
                 $currentUrl = $opts['url'] ?? '';
                 if ($currentUrl === '' || $currentUrl === 'http://localhost:8080' || $currentUrl === 'http://localhost:8300') {
                     $opts['url'] = rtrim($appUrl, '/');

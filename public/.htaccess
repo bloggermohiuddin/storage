@@ -8,3 +8,15 @@ RewriteCond %{REQUEST_FILENAME} !-d
 
 # Route all other requests to the front controller
 RewriteRule ^ index.php [L]
+
+# ──────────────────────────────────────────────────────────────
+# CORS — support presigned uploads from any origin
+# ──────────────────────────────────────────────────────────────
+<IfModule mod_headers.c>
+    SetEnvIf Origin "^(https?://.*)$" ALLOWED_ORIGIN=$1
+    Header set Access-Control-Allow-Origin "%{ALLOWED_ORIGIN}e" env=ALLOWED_ORIGIN
+    Header merge Vary Origin
+    Header set Access-Control-Allow-Methods "GET, POST, PUT, DELETE, HEAD, OPTIONS"
+    Header set Access-Control-Allow-Headers "Authorization, Content-Type, X-Amz-Date, X-Amz-Content-Sha256"
+    Header set Access-Control-Allow-Credentials "true"
+</IfModule>

@@ -4,6 +4,44 @@ declare(strict_types=1);
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 
+// ──────────────────────────────────────────────────────────────
+// Load .env file into $_ENV and $_SERVER (lightweight parser)
+// ──────────────────────────────────────────────────────────────
+$envFile = dirname(__DIR__) . '/.env';
+if (is_file($envFile)) {
+    foreach (file($envFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+        $line = trim($line);
+        if ($line === '' || $line[0] === '#') continue;
+        if (str_contains($line, '=')) {
+            [$key, $value] = explode('=', $line, 2);
+            $key = trim($key);
+            $value = trim($value, " \t\n\r\0\x0B\"'");
+            $_ENV[$key] = $value;
+            $_SERVER[$key] = $value;
+            putenv("{$key}={$value}");
+        }
+    }
+}
+
+// ──────────────────────────────────────────────────────────────
+// CORS — allow cross-origin presigned uploads & API access
+// ──────────────────────────────────────────────────────────────
+$origin  = $_SERVER['HTTP_ORIGIN'] ?? '*';
+$method  = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+$headers = $_SERVER['HTTP_ACCESS_CONTROL_REQUEST_HEADERS'] ?? '';
+
+header('Access-Control-Allow-Origin: ' . $origin);
+header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, HEAD, OPTIONS');
+header('Access-Control-Allow-Headers: ' . ($headers ?: '*'));
+header('Access-Control-Allow-Credentials: true');
+header('Access-Control-Max-Age: 86400');
+
+// Handle preflight — respond immediately
+if ($method === 'OPTIONS') {
+    http_response_code(204);
+    exit;
+}
+
 use StoragePlatform\API\Router;
 use StoragePlatform\API\Controllers\AuthController;
 use StoragePlatform\API\Controllers\BucketController;

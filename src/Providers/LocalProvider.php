@@ -123,7 +123,8 @@ class LocalProvider implements StorageProviderInterface
         $signature = hash_hmac('sha256', $bucket . '|' . $key . '|' . $expires, $secret);
         
         $baseUrl = $this->baseUrl ?: ($_ENV['APP_URL'] ?? 'http://localhost:8080');
-        return $baseUrl . '/' . rawurlencode($bucket) . '/' . rawurlencode($key) . 
+        $encodedKey = str_replace('%2F', '/', rawurlencode($key));
+        return $baseUrl . '/' . rawurlencode($bucket) . '/' . $encodedKey . 
                '?expires=' . $expires . 
                '&signature=' . $signature;
     }
